@@ -152,7 +152,7 @@ class DataResize:
         return self.np.stack(data_new)
 
 
-def NMF_CV(data, rank_range, replicates):
+def NMF_CV(data, rank_range, replicates, nr_iter=50):
     """
     fitting nmf model with cross-validation on component numbers
     INPUTs
@@ -170,7 +170,7 @@ def NMF_CV(data, rank_range, replicates):
 
     # run loop
     for rnk, rep in tqdm(itertools.product(rank_range, range(replicates))):
-        tr, te = cv_pca(data, rnk, nonneg=True)[2:]
+        tr, te = cv_pca(data, rnk, nonneg=True, nr_iter=nr_iter)[2:]
         train_err.append((rep, rnk, tr))
         test_err.append((rep, rnk, te))
 
