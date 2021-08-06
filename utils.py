@@ -152,7 +152,7 @@ class DataResize:
         return self.np.stack(data_new)
 
 
-def NMF_CV(data, rank_range, replicates, nr_iter=50):
+def NMF_CV_loop(data, rank_range, replicates, nr_iter=50):
     """
     fitting nmf model with cross-validation on component numbers
     INPUTs
@@ -175,6 +175,26 @@ def NMF_CV(data, rank_range, replicates, nr_iter=50):
         test_err.append((rep, rnk, te))
 
     return train_err, test_err
+
+
+def NMF_CV(data, rank, replicates, nr_iter=50):
+    """
+    fitting nmf model with cross-validation on component numbers
+    INPUTs
+    data: input data n * p matrix
+    rank: int
+    replicates: number of replicates int
+    This is good for parallel calculation
+    """
+    # import nmf_cv
+    from cv import cv_pca
+    import itertools
+    from tqdm import tqdm
+
+    # run nmf_cv
+    tr_error, te_error = cv_pca(data, rank, nonneg=True, nr_iter=nr_iter)[2:]
+
+    return rank, replicates, tr_error, te_error
 
 
 # filtering lowpass, high pass, bandpass, ...
