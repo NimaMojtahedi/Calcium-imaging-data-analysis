@@ -284,6 +284,7 @@ class Connectivity:
         self.model = cov
         return cov
 
+    # plotting sparsity alpha value
     def plot_model_selection(self):
         model = self.model
         self.plt.figure(figsize=(4, 3))
@@ -296,6 +297,10 @@ class Connectivity:
         self.plt.xlabel('alpha')
 
         self.plt.show()
+
+    # plot graph
+    def plot_network_graph(self):
+        pass
 
 
 # can calculate connectivity in specific frequency (principal frequencies)
