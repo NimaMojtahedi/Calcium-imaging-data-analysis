@@ -174,6 +174,10 @@ def NMF_CV_loop(data, rank_range, replicates, nr_iter=50):
         train_err.append((rep, rnk, tr))
         test_err.append((rep, rnk, te))
 
+        #  printing each loop results
+        print(
+            f'Replication {rep}, number of components {rnk}, train_error: {tr} - test_error: {te}')
+
     return train_err, test_err
 
 
@@ -193,8 +197,106 @@ def NMF_CV(data, rank, replicates, nr_iter=50):
 
     # run nmf_cv
     tr_error, te_error = cv_pca(data, rank, nonneg=True, nr_iter=nr_iter)[2:]
+    print(
+        f'Replication {replicates}, number of components {rank}, train_error: {tr_error} - test_error: {te_error}')
 
     return rank, replicates, tr_error, te_error
 
 
+class Connectivity:
+    """
+    In this class we investigate connectivity and network parameters for given data
+    This class has several methods for different tasks. 
+    Preprocessing method takes 3D tensor and subsamples spatially the data with given resolution to give row/col location and traces in time
+    if labels are not given user can define per location label name using get_label method
+    Using covariance_lasso we estimate sparse covariance and precision matrices with auto tune sparsity paramter using 5 fold cross validation
+
+    INPUT
+    data: n * p * p tensor
+    """
+    # import libraries
+    from sklearn.covariance import GraphLassoCV
+    from matplotlib import pyplot as plt
+    import numpy as np
+
+    # initialize class and get input tensor
+    def __init__(self, data, resolution=5):
+        self.data = data
+        self.n = data.shape[0]
+        self.nr_row = data.shape[1]
+        self.nr_col = data.shape[2]
+        self.resolution = resolution
+
+    # apply preprocessing step - spatially subsample data and store location and values in list
+    def preprocessing(self):
+        # get tensor data
+        data = self.data
+        nr_row = self.nr_row
+        nr_col = self.nr_col
+        resolution = self.resolution
+
+        # initialize location value list
+        loc_val = []
+
+        # get location and traces
+        for i in range(0, nr_col, resolution):
+            for j in range(0, nr_row, resolution):
+                loc_val.append([j, i, self.data[:, j, i]])
+
+        self.location_value = loc_val
+        return loc_val
+
+    # if labels are not provided get labels per location
+    def get_labels(self):
+
+        # reading locations from preprocessing function and asking user for label information
+        loc_val = self.location_value
+
+        # getting data and prepare average frame
+        img = self.np.mean(self.data, axis=0)
+
+        # initialize figure
+        fig, ax = self.plt.subplots(1, 1, figsize=(5, 5))
+
+        # initialize label list
+        labels = []
+
+        # ask labels
+        for item in loc_val:
+            ax.imshow(img)
+            ax.plot(item[0], item[1], 'o', ms=5)
+            labels.append(input('please write label name!'))
+
+    # estimate sparse covariance matrix
+    def covariance_lasso(self, alpha=10, max_iter=200, mode='cd', n_jobs=-1):
+
+        # get location value from preprocessing
+        loc_val = self.preprocessing()
+
+        # prepare data
+        data = [item[2] for item in loc_val]
+        data = self.np.stack(data)
+
+        # fitting model
+        cov = self.GraphLassoCV(
+            alpha=alpha, max_iter=max_iter, mode=mode, n_jobs=n_jobs).fit(data)
+
+        self.model = cov
+        return cov
+
+    def plot_model_selection(self):
+        model = self.model
+        self.plt.figure(figsize=(4, 3))
+        self.plt.axes([.2, .15, .75, .7])
+        self.plt.plot(model.cv_results_["alphas"],
+                      model.cv_results_["mean_score"], 'o-')
+        self.plt.axvline(model.alpha_, color='.5')
+        self.plt.title('Model selection')
+        self.plt.ylabel('Cross-validation score')
+        self.plt.xlabel('alpha')
+
+        self.plt.show()
+
+
+# can calculate connectivity in specific frequency (principal frequencies)
 # filtering lowpass, high pass, bandpass, ...
