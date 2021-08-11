@@ -215,17 +215,20 @@ class Connectivity:
     data: n * p * p tensor
     """
     # import libraries
-    from sklearn.covariance import GraphLassoCV
+    from sklearn.covariance import GraphicalLassoCV
     from matplotlib import pyplot as plt
     import numpy as np
+    # import mne
+    import networkx as nx
 
     # initialize class and get input tensor
-    def __init__(self, data, resolution=5):
+    def __init__(self, data, resolution=5, labels=False):
         self.data = data
         self.n = data.shape[0]
         self.nr_row = data.shape[1]
         self.nr_col = data.shape[2]
         self.resolution = resolution
+        self.labels = labels
 
     # apply preprocessing step - spatially subsample data and store location and values in list
     def preprocessing(self):
@@ -244,6 +247,11 @@ class Connectivity:
                 loc_val.append([j, i, self.data[:, j, i]])
 
         self.location_value = loc_val
+
+        # if labels are not provided
+        if not self.labels:
+            self.labels = self.get_labels()
+
         return loc_val
 
     # if labels are not provided get labels per location
@@ -266,6 +274,13 @@ class Connectivity:
             ax.imshow(img)
             ax.plot(item[0], item[1], 'o', ms=5)
             labels.append(input('please write label name!'))
+
+        self.labels = labels
+        return labels
+
+    # after providing labels name, saving results
+    def save_labels(self, address):
+        self.np.save(address + '\labels', self.labels)
 
     # estimate sparse covariance matrix
     def covariance_lasso(self, alpha=10, max_iter=200, mode='cd', n_jobs=-1):
@@ -299,9 +314,21 @@ class Connectivity:
         self.plt.show()
 
     # plot graph
-    def plot_network_graph(self):
-        pass
+    def plot_network_graph(self, adj_matrix, title):
 
+        # load labels and loc_val
+        loc = self.location_value
+        labels = self.labels
+
+        node_dict = {}
+        # create node dictionary
+        for i in range(len(labels)):
+            node_dict.update({labels[i]: loc[i][0]})
+
+        # creating graph from adj_matrix
+        graph = self.nx.from_numpy_matrix(adj_matrix)
+
+        self.plt.show()
 
 # can calculate connectivity in specific frequency (principal frequencies)
 # filtering lowpass, high pass, bandpass, ...
