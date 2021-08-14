@@ -1,5 +1,16 @@
 # In this file we are providing usefull functions
 
+# important libraries
+import numpy as np
+import matplotlib.pyplot as plt
+from joblib import Parallel, delayed
+import time
+import pandas as pd
+import seaborn as sns
+import pdb
+
+# functions and classes
+
 
 class DeltaF:
 
@@ -152,55 +163,188 @@ class DataResize:
         return self.np.stack(data_new)
 
 
-def NMF_CV_loop(data, rank_range, replicates, nr_iter=50):
+class NMFCV:
     """
-    fitting nmf model with cross-validation on component numbers
-    INPUTs
-    data: input data n * p matrix
-    rank_range: list of numbers for number of component parameter
-    replicates: number of replicates int
+    This class provides some methods for running nmf and estimating true number of components usign cross validation
+    INPUT
+    data = input data n*p matrix
+    use_feature_selection = using variance based feature selection if threshold is not given program ask user for threshold
     """
-    # import nmf_cv
-    from cv import cv_pca
-    import itertools
-    from tqdm import tqdm
 
-    # initialize train/test errors
-    train_err, test_err = [], []
+    def __init__(self, data, use_feature_selection=False, threshold=False):
 
-    # run loop
-    for rnk, rep in tqdm(itertools.product(rank_range, range(replicates))):
-        tr, te = cv_pca(data, rnk, nonneg=True, nr_iter=nr_iter)[2:]
-        train_err.append((rep, rnk, tr))
-        test_err.append((rep, rnk, te))
+        self.data = data
+        self.use_feature_selection = use_feature_selection
+        self.threshold = threshold
 
-        #  printing each loop results
+    def apply_feature_selection(self):
+        from sklearn.feature_selection import VarianceThreshold
+
+        n, p = self.data.shape
+
+        if self.threshold:
+            # initialize class with user given threshold
+            var_feature = VarianceThreshold(threshold=self.threshold)
+
+        else:
+            var_feature = VarianceThreshold(
+                threshold=int(input('please give threshold!')))
+
+        # fit on data
+        var_feature.fit(self.data)
+
+        # transform data
+        feature_selected = var_feature.transform(self.data)
         print(
-            f'Replication {rep}, number of components {rnk}, train_error: {tr} - test_error: {te}')
+            f'selected feature shape for given threshold: {feature_selected.shape}')
 
-    return train_err, test_err
+        # save to self
+        self.var_feature = var_feature
+        self.feature_selected = feature_selected
 
+        return feature_selected
 
-def NMF_CV(data, rank, replicates, nr_iter=50):
-    """
-    fitting nmf model with cross-validation on component numbers
-    INPUTs
-    data: input data n * p matrix
-    rank: int
-    replicates: number of replicates int
-    This is good for parallel calculation
-    """
-    # import nmf_cv
-    from cv import cv_pca
-    import itertools
-    from tqdm import tqdm
+    def estimate_components(self, use_parallel=False, n_jobs=1, nr_replicates=5, nr_components=[5, 80, 5], n_iters=50):
+        # estimating number of components in simple for loop or using parallel backend
 
-    # run nmf_cv
-    tr_error, te_error = cv_pca(data, rank, nonneg=True, nr_iter=nr_iter)[2:]
-    print(
-        f'Replication {replicates}, number of components {rank}, train_error: {tr_error} - test_error: {te_error}')
+        # feature reduction
+        if self.use_feature_selection:
+            data = self.apply_feature_selection()
 
-    return rank, replicates, tr_error, te_error
+        else:
+            data = self.data
+        if use_parallel:
+            # run in parallel
+            start_time = time.clock()
+            nmf_cv_results = Parallel(n_jobs=n_jobs, verbose=10,
+                                      backend='loky')(delayed(self.NMF_CV)(data=data,
+                                                                           rank=i,
+                                                                           replicates=j,
+                                                                           nr_iter=n_iters) for j in range(nr_replicates) for i in range(nr_components[0],
+                                                                                                                                         nr_components[
+                                                                                                                                             1],
+                                                                                                                                         nr_components[2]))
+            print(
+                f'execution time: {np.rint(time.clock() - start_time)} seconds')
+
+            self.nmf_cv_results = nmf_cv_results
+            return nmf_cv_results
+        else:
+            # initialize
+            nmf_cv_results = []
+
+            # run NMF_CV normal
+            start_time = time.clock()
+            nmf_cv_results = self.NMF_CV_loop(data=data, rank_range=np.arange(
+                nr_components[0], nr_components[1], nr_components[2]), replicates=nr_replicates, nr_iter=n_iters)
+            print(
+                f'execution time: {np.rint(time.clock() - start_time)} seconds')
+
+            self.nmf_cv_results = nmf_cv_results
+            return nmf_cv_results
+
+    def NMF_CV_loop(self, data, rank_range, replicates, nr_iter=50):
+        """
+        fitting nmf model with cross-validation on component numbers
+        INPUTs
+        data: input data n * p matrix
+        rank_range: list of numbers for number of component parameter
+        replicates: number of replicates int
+        """
+        # import nmf_cv
+        from cv import cv_pca
+        import itertools
+        from tqdm import tqdm
+
+        # initialize train/test errors
+        results = []
+
+        # run loop
+        for rnk, rep in tqdm(itertools.product(rank_range, range(replicates))):
+            tr, te = cv_pca(data, rnk, nonneg=True, nr_iter=nr_iter)[2:]
+            results.append((rnk, rep, tr, te))
+
+            #  printing each loop results
+            print(
+                f'Replication {rep}, number of components {rnk}, train_error: {tr} - test_error: {te}')
+
+        return results
+
+    def NMF_CV(self, data, rank, replicates, nr_iter=50):
+        """
+        fitting nmf model with cross-validation on component numbers
+        INPUTs
+        data: input data n * p matrix
+        rank: int
+        replicates: number of replicates int
+        This is good for parallel calculation
+        """
+        # import nmf_cv
+        from cv import cv_pca
+        import itertools
+
+        # run nmf_cv
+        tr_error, te_error = cv_pca(
+            data, rank, nonneg=True, nr_iter=nr_iter)[2:]
+
+        return rank, replicates, tr_error, te_error
+
+    def run_nmf(self, nr_components):
+        from sklearn.decomposition import NMF
+
+        sk_nmf = NMF(n_components=nr_components, random_state=1)
+
+        # check data type
+        if self.use_feature_selection:
+
+            # fitting and getting transformation
+            traces = sk_nmf.fit_transform(self.feature_selected)
+
+            # getting components
+            temp_cmp = sk_nmf.components_
+
+            # returning abck components to original space
+            components = self.var_feature.inverse_transform(temp_cmp)
+
+        else:
+            # fitting and getting transformation
+            traces = sk_nmf.fit_transform(self.data)
+
+            # getting components
+            components = sk_nmf.components_
+
+        return components, traces
+
+    def plot_cv_results(self, save_fig_add=False):
+
+        cv_results = pd.DataFrame(self.nmf_cv_results, columns=[
+            'Components', 'Replication', 'Train_Error', 'Test_Error'])
+
+        # change to long format
+        cv_results = cv_results.melt(id_vars=['Components', 'Replication'],
+                                     var_name='Error_Type', value_name='Error')
+
+        # log error
+        cv_results['Error(log)'] = cv_results['Error'].apply(
+            lambda x: np.log(x))
+
+        # finding best component number
+        min_index = cv_results[cv_results.Error_Type == 'Test_Error'].groupby(
+            by=['Components']).agg(np.mean)['Error'].idxmin()
+        print(f'Component number with minimum test error is {min_index}')
+
+        # ploting
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
+        sns.lineplot(data=cv_results, x="Components",
+                     y="Error(log)", hue='Error_Type', marker='*', ax=ax, palette='bone_r')
+        ax.axvline(x=min_index, alpha=0.5, color='blue', linewidth=2,
+                   linestyle='-.', label='Optimal component numbers')
+        ax.legend()
+
+        # saving figure
+        if save_fig_add:
+            fig.savefig(fname=save_fig_add + '/nmf_cv_result.pdf',
+                        dpi=600, quality=100, format='pdf')
 
 
 class Connectivity:
@@ -332,3 +476,4 @@ class Connectivity:
 
 # can calculate connectivity in specific frequency (principal frequencies)
 # filtering lowpass, high pass, bandpass, ...
+# CCA
