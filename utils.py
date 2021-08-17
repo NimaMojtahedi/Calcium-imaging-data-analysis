@@ -379,7 +379,7 @@ class NMFCV:
 
         return components, traces
 
-    def plot_cv_results(self, columns, save_fig_add=False):
+    def plot_cv_results(self, columns, min_by, save_fig_add=False):
 
         cv_results = pd.DataFrame(self.nmf_cv_results, columns=columns)
 
@@ -392,7 +392,7 @@ class NMFCV:
             lambda x: np.log(x))
 
         # finding best component number
-        min_index = cv_results[cv_results.Error_Type == 'Test_Error'].groupby(
+        min_index = cv_results[cv_results.Error_Type == min_by].groupby(
             by=['Components']).agg(np.mean)['Error'].idxmin()
         print(f'Component number with minimum test error is {min_index}')
 
