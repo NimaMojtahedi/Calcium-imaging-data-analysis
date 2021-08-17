@@ -8,6 +8,11 @@ import time
 import pandas as pd
 import seaborn as sns
 import pdb
+from scipy import sparse
+from sklearn.decomposition import NMF
+from sklearn.metrics import mean_squared_error, explained_variance_score, r2_score
+from matplotlib import animation
+from IPython.display import HTML
 
 # functions and classes
 
@@ -204,7 +209,66 @@ class NMFCV:
 
         return feature_selected
 
-    def estimate_components(self, use_parallel=False, n_jobs=1, nr_replicates=5, nr_components=[5, 80, 5], n_iters=50):
+    def estimate_componentsV2(self, n_jobs=5, nr_replicates=5, nr_components=[5, 80, 5], n_iters=2000, mask_portion=20):
+        # estimating using sklearn package by masking data randomly
+        # main data
+        if self.use_feature_selection:
+            X_train = self.apply_feature_selection()
+        else:
+            X_train = self.data  # n*p
+
+        # data size
+        n, p = X_train.shape
+
+        # zero indices
+        z_cols = np.random.randint(0, p-1, int(n*p*mask_portion/100))
+        z_rows = np.random.randint(0, n-1, int(n*p*mask_portion/100))
+
+        # prepare sparse matrix
+        train = X_train.copy()
+        train[z_rows, z_cols] = 0
+
+        ix = np.nonzero(train)
+        sparse_mat = sparse.csc_matrix((train[ix], ix))
+
+        # run nmf in parallel
+        results = Parallel(n_jobs=n_jobs)(delayed(self.estimate_componentsV2_helper)(X_train, sparse_mat, n_cmp, n_rep,
+                                                                                     z_rows, z_cols, n_iters) for n_cmp in range(nr_components[0],
+                                                                                                                                 nr_components[
+                                                                                                                                     1],
+                                                                                                                                 nr_components[2]) for n_rep in range(nr_replicates))
+        self.nmf_cv_results = results
+        return results
+
+    def estimate_componentsV2_helper(self, data, train_sparse, nr_cmp, rep_nr, z_rows, z_cols, n_iters=2000):
+        # train is sparce matrix
+        # test is normal matrix
+
+        # model fitting
+        model = NMF(n_components=nr_cmp, init="nndsvd",
+                    max_iter=n_iters).fit(train_sparse)
+        reconstructed = model.inverse_transform(model.transform(train_sparse))
+
+        # error calculation
+        # train
+        mse_train = mean_squared_error(
+            data[~z_rows, ~z_cols], reconstructed[~z_rows, ~z_cols], multioutput='uniform_average')
+        r2e_train = r2_score(
+            data[~z_rows, ~z_cols], reconstructed[~z_rows, ~z_cols], multioutput='uniform_average')
+        evar_train = explained_variance_score(
+            data[~z_rows, ~z_cols], reconstructed[~z_rows, ~z_cols], multioutput='uniform_average')
+
+        # test
+        mse_test = mean_squared_error(
+            data[z_rows, z_cols], reconstructed[z_rows, z_cols], multioutput='uniform_average')
+        r2e_test = r2_score(
+            data[z_rows, z_cols], reconstructed[z_rows, z_cols], multioutput='uniform_average')
+        evar_test = explained_variance_score(
+            data[z_rows, z_cols], reconstructed[z_rows, z_cols], multioutput='uniform_average')
+
+        return nr_cmp, rep_nr, mse_train, r2e_train, evar_train, mse_test, r2e_test, evar_test
+
+    def estimate_componentsV1(self, use_parallel=False, n_jobs=1, nr_replicates=5, nr_components=[5, 80, 5], n_iters=50):
         # estimating number of components in simple for loop or using parallel backend
 
         # feature reduction
@@ -315,10 +379,9 @@ class NMFCV:
 
         return components, traces
 
-    def plot_cv_results(self, save_fig_add=False):
+    def plot_cv_results(self, columns, save_fig_add=False):
 
-        cv_results = pd.DataFrame(self.nmf_cv_results, columns=[
-            'Components', 'Replication', 'Train_Error', 'Test_Error'])
+        cv_results = pd.DataFrame(self.nmf_cv_results, columns=columns)
 
         # change to long format
         cv_results = cv_results.melt(id_vars=['Components', 'Replication'],
@@ -473,6 +536,32 @@ class Connectivity:
         graph = self.nx.from_numpy_matrix(adj_matrix)
 
         self.plt.show()
+
+
+def video_player(np_array_video, intervals_=50):
+
+    # np array with shape (frames, height, width, channels)
+    if len(np_array_video.shape) == 3:
+        np_array_video = np_array_video[..., np.newaxis]
+
+    video = np.array(np_array_video)
+
+    fig = plt.figure()
+    im = plt.imshow(video[0, :, :, :])
+
+    plt.close()  # this is required to not display the generated image
+
+    def init():
+        im.set_data(video[0, :, :, :])
+
+    def animate(i):
+        im.set_data(video[i, :, :, :])
+        return im
+
+    anim = animation.FuncAnimation(fig, animate, init_func=init, frames=video.shape[0],
+                                   interval=intervals_)
+    return HTML(anim.to_html5_video())
+
 
 # can calculate connectivity in specific frequency (principal frequencies)
 # filtering lowpass, high pass, bandpass, ...
