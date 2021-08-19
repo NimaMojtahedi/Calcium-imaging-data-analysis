@@ -13,6 +13,9 @@ from sklearn.decomposition import NMF
 from sklearn.metrics import mean_squared_error, explained_variance_score, r2_score
 from matplotlib import animation
 from IPython.display import HTML
+import nimfa
+from skimage import morphology
+from skimage import measure
 
 # functions and classes
 
@@ -208,6 +211,101 @@ class NMFCV:
         self.feature_selected = feature_selected
 
         return feature_selected
+
+    def estimate_componentsV3(self, nmf_type, rank_cands=range(5, 30, 3), max_iter=200):
+        """
+        nmf_type : Types of nmfs
+                    - nmf
+                    - bd
+                    - Icm
+                    - Lfnmf
+                    - Nsnmf
+                    - PMF
+                    - Pmfcc
+        """
+
+        # main data
+        if self.use_feature_selection:
+            V = self.apply_feature_selection()
+        else:
+            V = self.data  # n*p
+
+        # check type
+        if nmf_type.lower() == "nmf":
+            nmf = nimfa.Nmf(V, seed="nndsvd", rank=10, max_iter=max_iter, update='euclidean',
+                            objective='fro')
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "bd":
+            nmf = nimfa.Bd(V, seed="nndsvd", rank=10, max_iter=max_iter, alpha=np.zeros((V.shape[0], 10)),
+                           beta=np.zeros((10, V.shape[1])), theta=.0, k=.0, sigma=1., skip=1000, stride=1,
+                           n_w=np.zeros((10, 1)), n_h=np.zeros((10, 1)), n_sigma=False)
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "icm":
+            nmf = nimfa.Icm(V, seed="nndsvd", rank=10, max_iter=max_iter, iiter=20,
+                            alpha=np.random.randn(V.shape[0], 10), beta=np.random.randn(10, V.shape[1]),
+                            theta=0., k=0., sigma=1.)
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "lfnmf":
+            nmf = nimfa.Lfnmf(V, seed="nndsvd", W=np.random.rand(V.shape[0], 10),
+                              H=np.random.rand(10, V.shape[1]), rank=10, max_iter=max_iter,
+                              alpha=0.01)
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "nsnmf":
+            nmf = nimfa.Nsnmf(V, seed="nndsvd", rank=10, max_iter=max_iter)
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "pmf":
+            nmf = nimfa.Pmf(V, seed="nndsvd", rank=10,
+                            max_iter=max_iter, rel_error=1e-5)
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        elif nmf_type.lower() == "pmfcc":
+            nmf = nimfa.Pmf(V, seed="nndsvd", rank=10, max_iter=max_iter,
+                            theta=np.random.rand(V.shape[1], V.shape[1]))
+            summary = nmf.estimate_rank(rank_range=rank_cands)
+
+        else:
+            raise Exception("NMF type is not valid.")
+
+        self.nmf_cv_results = summary
+        self.rank_cands = rank_cands
+
+        return summary, nmf
+
+    def plot_cv_resultsV3(self, save_fig_add=False):
+
+        # loading data
+        rank_cands = self.rank_cands
+        summary = self.nmf_cv_results
+
+        # extracting data
+        rss = [summary[rank]['rss'] for rank in rank_cands]
+        coph = [summary[rank]['cophenetic'] for rank in rank_cands]
+        disp = [summary[rank]['dispersion'] for rank in rank_cands]
+        spar = [summary[rank]['sparseness'] for rank in rank_cands]
+        spar_w, spar_h = zip(*spar)
+        evar = [summary[rank]['evar'] for rank in rank_cands]
+
+        #plt.plot(rank_cands, rss, 'o-', label='RSS', linewidth=2)
+        plt.plot(rank_cands, coph, 'o-',
+                 label='Cophenetic correlation', linewidth=2)
+        plt.plot(rank_cands, disp, 'o-', label='Dispersion', linewidth=2)
+        plt.plot(rank_cands, spar_w, 'o-',
+                 label='Sparsity (Basis)', linewidth=2)
+        plt.plot(rank_cands, spar_h, 'o-',
+                 label='Sparsity (Mixture)', linewidth=2)
+        plt.plot(rank_cands, evar, 'o-',
+                 label='Explained variance', linewidth=2)
+        plt.legend(bbox_to_anchor=(0.5, -0.05), ncol=3, numpoints=1)
+        plt.show()
+
+        if save_fig_add:
+            plt.savefig(fname=save_fig_add,
+                        dpi=600, quality=100, format='pdf')
 
     def estimate_componentsV2(self, n_jobs=5, nr_replicates=5, nr_components=[5, 80, 5], n_iters=2000, mask_portion=20):
         # estimating using sklearn package by masking data randomly
@@ -406,10 +504,47 @@ class NMFCV:
 
         # saving figure
         if save_fig_add:
-            fig.savefig(fname=save_fig_add + '/nmf_cv_result.pdf',
+            fig.savefig(fname=save_fig_add,
                         dpi=600, quality=100, format='pdf')
 
 
+# NMF Post processing
+def image_threshold(img, disk_size=2, threshold=0.5):
+    """
+    it is morphology based image thresholding
+    using tophat method the function removes small objects in grayscale image
+    INPUTs
+    image: input image 2D - grayscale without extra channels
+    disk_size: size of disk for tophat morphology
+    threshold: threshold number (float) to return binary image
+    """
+    footprint = morphology.disk(disk_size)
+    res = morphology.white_tophat(img, footprint)
+    remain = img - res
+
+    return remain > threshold
+
+
+def blob_labeling(image):
+    """
+    this function calculates properties of detected regions
+    sub-functions:
+    area
+    centroid
+    bounding-box
+    coordinatios of pixels
+    """
+    labels_ = measure.label(image, background=0)
+
+    df = pd.DataFrame(measure.regionprops_table(labels_, properties=('centroid',
+                                                                     'orientation', 'area', 'bbox', 'coords')))
+
+    df = df.rename(columns={"centroid-0": "center-y(rows)", "centroid-1": "center-x(cols)",
+                            "bbox-0": "min_row", "bbox-1": "min_col", "bbox-2": "max_row", "bbox-3": "max_col"})
+    return df
+
+
+# connectivity analysis
 class Connectivity:
     """
     In this class we investigate connectivity and network parameters for given data
