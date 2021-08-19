@@ -543,6 +543,27 @@ def blob_labeling(image):
                             "bbox-0": "min_row", "bbox-1": "min_col", "bbox-2": "max_row", "bbox-3": "max_col"})
     return df
 
+# controlling nmf and ROIs
+
+
+def plot_nmf_ROIs(components, ROIs, base_w_size=4, c_min=0, c_max=3):
+    # prepare subplots
+    fig, axes = plt.subplots(nrows=components.shape[0], ncols=2,
+                             sharex=True, sharey=True,
+                             figsize=(base_w_size, int(base_w_size * components.shape[0]/2)), gridspec_kw={'hspace': 0})
+
+    # start plotting
+    for i, ax in enumerate(axes.flat):
+        if i % 2 == 0:
+            ax.imshow(components[int(i/2)], vmin=c_min, vmax=c_max)
+            ax.set_title(f"component # {int(i/2)}")
+        elif i % 2 == 1:
+            ax.imshow(ROIs[int(i/2)], vmin=c_min, vmax=c_max)
+            ax.set_title(f"ROI # {int(i/2)}")
+
+    plt.tight_layout()
+    plt.show()
+
 
 # connectivity analysis
 class Connectivity:
