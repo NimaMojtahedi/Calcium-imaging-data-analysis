@@ -16,6 +16,9 @@ from IPython.display import HTML
 import nimfa
 from skimage import morphology
 from skimage import measure
+from mne.viz import circular_layout
+from mne.viz import plot_connectivity_circle
+from sklearn.covariance import GraphicalLassoCV
 
 # functions and classes
 
@@ -65,7 +68,9 @@ class DeltaF:
         # running ransac fit/predict on input signal
 
         # find indices
-        index_ = self.find_index(X=sig)
+        # index_ = self.find_index(X=sig) when data has trend it causes problem
+        # to solve trend I use all data set at the moment
+        index_ = np.arange(len(sig))
 
         # fit predict ransac
         base_line = self.fit_transform(X=index_.reshape(-1, 1),
@@ -330,11 +335,11 @@ class NMFCV:
         sparse_mat = sparse.csc_matrix((train[ix], ix))
 
         # run nmf in parallel
-        results = Parallel(n_jobs=n_jobs)(delayed(self.estimate_componentsV2_helper)(X_train, sparse_mat, n_cmp, n_rep,
-                                                                                     z_rows, z_cols, n_iters) for n_cmp in range(nr_components[0],
-                                                                                                                                 nr_components[
-                                                                                                                                     1],
-                                                                                                                                 nr_components[2]) for n_rep in range(nr_replicates))
+        results = Parallel(n_jobs=n_jobs, verbose=10, pre_dispatch=n_jobs)(delayed(self.estimate_componentsV2_helper)(X_train, sparse_mat, n_cmp, n_rep,
+                                                                                                                      z_rows, z_cols, n_iters) for n_cmp in range(nr_components[0],
+                                                                                                                                                                  nr_components[
+                                                                                                                          1],
+            nr_components[2]) for n_rep in range(nr_replicates))
         self.nmf_cv_results = results
         return results
 
@@ -378,7 +383,7 @@ class NMFCV:
         if use_parallel:
             # run in parallel
             start_time = time.clock()
-            nmf_cv_results = Parallel(n_jobs=n_jobs, verbose=10,
+            nmf_cv_results = Parallel(n_jobs=n_jobs, verbose=10, pre_dispatch=n_jobs,
                                       backend='loky')(delayed(self.NMF_CV)(data=data,
                                                                            rank=i,
                                                                            replicates=j,
@@ -505,7 +510,7 @@ class NMFCV:
         # saving figure
         if save_fig_add:
             fig.savefig(fname=save_fig_add,
-                        dpi=600, quality=100, format='pdf')
+                        dpi=600,  format='pdf')
 
 
 # NMF Post processing
@@ -585,40 +590,41 @@ class Connectivity:
     import networkx as nx
 
     # initialize class and get input tensor
-    def __init__(self, data, resolution=5, labels=False):
+    def __init__(self, data, labels=False):
         self.data = data
         self.n = data.shape[0]
         self.nr_row = data.shape[1]
         self.nr_col = data.shape[2]
-        self.resolution = resolution
         self.labels = labels
 
     # apply preprocessing step - spatially subsample data and store location and values in list
-    def preprocessing(self):
+    def preprocessing(self, rows_start_end, cols_start_end, resolution=5):
+        # inform user about symmetry of selected dots between hemispheres
+        print("*********************************************************************************")
+        print("***** selected dots have to be symmetric between left and right hemispheres *****")
+        print("*********************************************************************************")
+
         # get tensor data
-        data = self.data
-        nr_row = self.nr_row
-        nr_col = self.nr_col
-        resolution = self.resolution
+        self.resolution = resolution
 
         # initialize location value list
         loc_val = []
 
-        # get location and traces
-        for i in range(0, nr_col, resolution):
-            for j in range(0, nr_row, resolution):
+        # get location and traces (when plotting notice that col is x and row is y)
+        for i in range(cols_start_end[0], cols_start_end[1], resolution):
+            for j in range(rows_start_end[0], rows_start_end[1], resolution):
                 loc_val.append([j, i, self.data[:, j, i]])
 
         self.location_value = loc_val
 
         # if labels are not provided
         if not self.labels:
-            self.labels = self.get_labels()
+            self.labels = self.show_locations()
 
         return loc_val
 
     # if labels are not provided get labels per location
-    def get_labels(self):
+    def show_locations(self):
 
         # reading locations from preprocessing function and asking user for label information
         loc_val = self.location_value
@@ -627,37 +633,44 @@ class Connectivity:
         img = self.np.mean(self.data, axis=0)
 
         # initialize figure
-        fig, ax = self.plt.subplots(1, 1, figsize=(5, 5))
+        fig, ax = self.plt.subplots(1, 1, figsize=(10, 10))
 
-        # initialize label list
-        labels = []
+        # plot img and add seleted points withred circles
+        ax.imshow(img)
+        for i, item in enumerate(loc_val):
+            ax.plot(item[1], item[0], 'ro', ms=10)
+            ax.annotate(str(i), xy=(item[1], item[0]))
 
-        # ask labels
-        for item in loc_val:
-            ax.imshow(img)
-            ax.plot(item[0], item[1], 'o', ms=5)
-            labels.append(input('please write label name!'))
+    def show_labels(self, labels, fig_size=(10, 10), font_size=5):
+        # annotating labels on image
+        loc_val = self.location_value
 
-        self.labels = labels
-        return labels
+        # getting data and prepare average frame
+        img = self.np.mean(self.data, axis=0)
 
-    # after providing labels name, saving results
-    def save_labels(self, address):
-        self.np.save(address + '\labels', self.labels)
+        # initialize figure
+        fig, ax = self.plt.subplots(1, 1, figsize=fig_size)
+
+        # plot img and add seleted points withred circles
+        ax.imshow(img)
+        for i, item in enumerate(loc_val):
+            ax.plot(item[1], item[0], 'ro', ms=10)
+            ax.annotate(labels[i], xy=(item[1], item[0]), fontsize=font_size)
 
     # estimate sparse covariance matrix
-    def covariance_lasso(self, alpha=10, max_iter=200, mode='cd', n_jobs=-1):
+    def covariance_lasso(self, location_value, alpha=10, max_iter=200, mode='cd', n_jobs=-1):
 
         # get location value from preprocessing
-        loc_val = self.preprocessing()
+        loc_val = location_value
 
         # prepare data
         data = [item[2] for item in loc_val]
         data = self.np.stack(data)
+        data = data.T
 
         # fitting model
-        cov = self.GraphLassoCV(
-            alpha=alpha, max_iter=max_iter, mode=mode, n_jobs=n_jobs).fit(data)
+        cov = GraphicalLassoCV(
+            alphas=alpha, max_iter=max_iter, mode=mode, n_jobs=n_jobs).fit(data)
 
         self.model = cov
         return cov
@@ -665,36 +678,126 @@ class Connectivity:
     # plotting sparsity alpha value
     def plot_model_selection(self):
         model = self.model
-        self.plt.figure(figsize=(4, 3))
-        self.plt.axes([.2, .15, .75, .7])
-        self.plt.plot(model.cv_results_["alphas"],
-                      model.cv_results_["mean_score"], 'o-')
-        self.plt.axvline(model.alpha_, color='.5')
-        self.plt.title('Model selection')
-        self.plt.ylabel('Cross-validation score')
-        self.plt.xlabel('alpha')
+        plt.figure(figsize=(6, 4))
 
-        self.plt.show()
+        plt.plot(model.cv_alphas_,
+                 np.mean(model.grid_scores_, axis=1), 'o-', label='tested alphas')
+        plt.axvline(model.alpha_, color='.5',
+                    label=f'optimal alpha = {np.round(model.alpha_, 2)}')
+        plt.legend()
+        plt.title('Model selection')
+        plt.ylabel('Cross-validation score')
+        plt.xlabel('alpha')
+
+        plt.show()
 
     # plot graph
-    def plot_network_graph(self, adj_matrix, title):
+    def plot_network_graph(self, adj_matrix, labels, config, title, save_add=False, font_size=10, fig_size=(10, 10), nr_lines=300):
+        """
+        INPUTs
+        adj_matrix: n*n connectivity matrix. False means covariance_lasso is calculated 
+        labels: label name corresponding to each individual i row/col in conenctivity matrix
+        config: configuration dictionary indicating color code information to given brain regions
+        cov_prec: if using covariance_lasso, plot convaraince or prescision. If True cov and if False recision
+        """
 
-        # load labels and loc_val
-        loc = self.location_value
-        labels = self.labels
+        # solving labels duplicate problem(it is necessary for layout)
+        all_labels = self.check_label_duplicate(labels)
 
-        node_dict = {}
-        # create node dictionary
-        for i in range(len(labels)):
-            node_dict.update({labels[i]: loc[i][0]})
+        # sorting nodes to get circular right-left hemispher
+        index_sorted, node_colors = self. sort_labels(
+            all_labels=all_labels, config=config)
 
-        # creating graph from adj_matrix
-        graph = self.nx.from_numpy_matrix(adj_matrix)
+        # define circular layout and get node angles
+        node_angles = circular_layout(all_labels, [all_labels[i] for i in index_sorted], start_pos=90,
+                                      group_boundaries=[0, len(all_labels) / 2])
 
-        self.plt.show()
+        # plot connectivity map
+        fig = plt.figure(num=None, figsize=fig_size, facecolor='black')
+        fig, ax = plot_connectivity_circle(adj_matrix, all_labels, node_colors=node_colors,
+                                           node_angles=node_angles,
+                                           title=title, fontsize_names=font_size, fig=fig, n_lines=nr_lines)
+
+        if save_add:
+            fig.savefig(fname=save_add,
+                        dpi=600, format='pdf')
+
+    # solve duplicates issue automatically
+
+    def check_label_duplicate(self, labels):
+        # check if duplicates happen in the label list
+
+        # initialize lists
+        my_list = []
+        out = []
+
+        # check duplicates in for loop and if happens correct them
+        for label in labels:
+            if label in my_list:
+
+                # get repeatition of duplicate
+                # find where _ is happening
+                under_line = label.find('_')
+
+                # find name of region
+                key_word = label[:under_line]
+
+                # search in output list for all words starting with key_word
+                all_dup = []
+                all_dup = [lb for lb in out if lb.startswith(key_word)]
+
+                # always take the last one
+                out.append(self.label_helper(my_string=all_dup[-1]))
+            else:
+                out.append(label)
+                my_list.append(label)
+        return out
+
+    def label_helper(self, my_string):
+        # this is a helper function to add digit on duplicate
+
+        # first find where _ is
+        under_line = my_string.find('_')
+
+        # check if character before _ is numberic or not and if not add number if yes add 1 on number
+        if my_string[under_line-2:under_line].isnumeric():
+            my_string = my_string.replace(
+                my_string[under_line-2:under_line], str(int(my_string[under_line-2:under_line]) + 1))
+        else:
+            my_string = my_string[:under_line] + \
+                str(10) + my_string[under_line:]
+
+        return my_string
+
+    def sort_labels(self, all_labels, config):
+        all_labels = self.check_label_duplicate(all_labels)
+
+        index_rh = []
+        index_lh = []
+
+        for k, v in config.items():
+            index_rh = index_rh + \
+                [i for i, ll in enumerate(all_labels) if (
+                    ll.startswith(k) and ll.endswith('right'))]
+            index_lh = index_lh + \
+                [i for i, ll in enumerate(all_labels) if (
+                    ll.startswith(k) and ll.endswith('left'))]
+
+        # starting with indexlh because start_pos of cicular_layout start at 90 degree
+        # and because we continue in anti-clockwise direction for right hemisphere I have to flip indices
+        index_sorted = index_lh + index_rh[::-1]
+
+        # create colors
+        my_colors = []
+        for name in all_labels:
+            for name2 in config.keys():
+                if name.startswith(name2):
+                    my_colors.append(config[name2][0])
+
+        return index_sorted, my_colors
 
 
-def video_player(np_array_video, intervals_=50):
+def video_player(np_array_video, cmin=0, cmax=1, intervals_=50):
 
     # np array with shape (frames, height, width, channels)
     if len(np_array_video.shape) == 3:
@@ -703,7 +806,7 @@ def video_player(np_array_video, intervals_=50):
     video = np.array(np_array_video)
 
     fig = plt.figure()
-    im = plt.imshow(video[0, :, :, :])
+    im = plt.imshow(video[0, :, :, :], vmin=cmin, vmax=cmax)
 
     plt.close()  # this is required to not display the generated image
 
@@ -722,3 +825,48 @@ def video_player(np_array_video, intervals_=50):
 # can calculate connectivity in specific frequency (principal frequencies)
 # filtering lowpass, high pass, bandpass, ...
 # CCA
+
+
+""" NOT using it at the moment
+# https://www.python-graph-gallery.com/406-chord-diagram_mne
+def plot_network(adj, labels, weight_norm = 1):
+    
+    plotting circular graph from given adjancy matrix and label names
+   
+    # import library
+    import networkx as nx
+    
+    # create graph
+    g = nx.from_numpy_matrix(adj)
+    
+    # initialize label dict and add label names
+    label_dict = {}
+    for i in range(12):
+        label_dict.update({i:labels[i]})
+
+    # get full edge information
+    edges = g.edges()
+
+    # prepare figure, calculate weights and set draw options
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize = (6,6))
+    weights = [g[u][v]['weight']/weight_norm for u,v in edges]
+    options = {
+        "node_color": "#A0CBE2",
+        "edge_color": weights,
+        "labels": label_dict,
+        "width":weights,
+        "edge_cmap": plt.cm.autumn,
+        "with_labels": True,
+        "node_size":300
+    }
+    # plot graph
+    nx.draw(g, pos = nx.circular_layout(g), ax = ax, **options)
+
+
+
+
+    adjc = np.random.randint(low = 0, high = 40, size =(12,12))
+lb = ['a', 'b', 'c', 'd', 'e','f', 'h', 'g', 'l', 'm', 'n','o']
+plot_network(adj=adjc, 
+             labels=lb, weight_norm = 7)
+"""
